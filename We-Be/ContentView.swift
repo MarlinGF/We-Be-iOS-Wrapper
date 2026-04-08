@@ -103,9 +103,30 @@ struct WebViewWrapper: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
 
         private let parent: WebViewWrapper
+        private let allowedDomains = [
+            "webefriends.com",
+            "stripe.com",
+            "stripe.network",
+            "fairnewsfirst.com",
+            "firebaseapp.com",
+            "googleapis.com",
+            "gstatic.com",
+            "hosted.app",
+            "youtube.com",
+            "youtube-nocookie.com",
+            "youtu.be",
+            "ytimg.com"
+        ]
 
         init(_ parent: WebViewWrapper) {
             self.parent = parent
+        }
+
+        private func hostIsAllowed(_ host: String) -> Bool {
+            let normalizedHost = host.lowercased()
+            return allowedDomains.contains { allowed in
+                normalizedHost == allowed || normalizedHost.hasSuffix(".\(allowed)")
+            }
         }
 
         @objc func didPullToRefresh() {
@@ -149,22 +170,24 @@ struct WebViewWrapper: UIViewRepresentable {
                 return
             }
 
-            let allowedDomains = [
-                "webefriends.com",
-                "stripe.com",
-                "stripe.network",
-                "fairnewsfirst.com",
-                "firebaseapp.com",
-                "googleapis.com",
-                "gstatic.com",
-                "hosted.app"
-            ]
-
             if let host = url.host {
-                if allowedDomains.contains(where: { host.contains($0) }) {
+                if hostIsAllowed(host) {
                     decisionHandler(.allow)
                     return
                 }
+            }
+
+            let isTopFrameNavigation = navigationAction.targetFrame?.isMainFrame ?? false
+            let isExplicitUserTap = navigationAction.navigationType == .linkActivated
+
+            if !isTopFrameNavigation {
+                decisionHandler(.allow)
+                return
+            }
+
+            if !isExplicitUserTap {
+                decisionHandler(.allow)
+                return
             }
 
             UIApplication.shared.open(url)
@@ -178,7 +201,13 @@ struct WebViewWrapper: UIViewRepresentable {
                      windowFeatures: WKWindowFeatures) -> WKWebView? {
 
             if navigationAction.targetFrame == nil {
-                webView.load(navigationAction.request)
+                if let url = navigationAction.request.url,
+                   let host = url.host,
+                   hostIsAllowed(host) {
+                    webView.load(navigationAction.request)
+                } else if let url = navigationAction.request.url {
+                    UIApplication.shared.open(url)
+                }
             }
 
             return nil
