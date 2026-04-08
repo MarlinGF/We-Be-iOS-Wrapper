@@ -103,7 +103,7 @@ struct WebViewWrapper: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
 
         private let parent: WebViewWrapper
-        private let allowedDomains = [
+        private let allowedDomains: Set<String> = [
             "webefriends.com",
             "stripe.com",
             "stripe.network",
@@ -111,22 +111,36 @@ struct WebViewWrapper: UIViewRepresentable {
             "firebaseapp.com",
             "googleapis.com",
             "gstatic.com",
-            "hosted.app",
+            "hosted.app"
+        ]
+        private let allowedEmbedHosts: Set<String> = [
             "youtube.com",
+            "www.youtube.com",
             "youtube-nocookie.com",
+            "www.youtube-nocookie.com",
             "youtu.be",
-            "ytimg.com"
+            "ytimg.com",
+            "i.ytimg.com",
+            "tiktok.com",
+            "www.tiktok.com",
+            "vm.tiktok.com",
+            "vt.tiktok.com"
         ]
 
         init(_ parent: WebViewWrapper) {
             self.parent = parent
         }
 
-        private func hostIsAllowed(_ host: String) -> Bool {
+        private func hostMatchesAllowedSet(_ host: String, allowedHosts: Set<String>) -> Bool {
             let normalizedHost = host.lowercased()
-            return allowedDomains.contains { allowed in
+            return allowedHosts.contains { allowed in
                 normalizedHost == allowed || normalizedHost.hasSuffix(".\(allowed)")
             }
+        }
+
+        private func hostIsAllowed(_ host: String) -> Bool {
+            hostMatchesAllowedSet(host, allowedHosts: allowedDomains) ||
+            hostMatchesAllowedSet(host, allowedHosts: allowedEmbedHosts)
         }
 
         @objc func didPullToRefresh() {
