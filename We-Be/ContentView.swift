@@ -3,6 +3,7 @@ import WebKit
 import Network
 import Combine
 import AVFoundation
+import UserNotifications
 
 final class NetworkMonitor: ObservableObject {
     private let monitor = NWPathMonitor()
@@ -254,10 +255,10 @@ struct WebViewWrapper: UIViewRepresentable {
 }
 
 struct ContentView: View {
-
     @StateObject private var network = NetworkMonitor()
     @StateObject private var store = WebViewStore(url: URL(string: "https://webefriends.com")!)
     @State private var isLoading = true
+    @State private var didRequestPushAuthorization = false
 
     var body: some View {
 
@@ -270,6 +271,8 @@ struct ContentView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                         isLoading = false
                     }
+
+                    requestPushAuthorizationIfNeeded()
                 }
 
             if !network.isOnline {
@@ -282,6 +285,26 @@ struct ContentView: View {
             if isLoading {
                 LoadingView()
                     .transition(.opacity)
+            }
+        }
+    }
+
+    private func requestPushAuthorizationIfNeeded() {
+        guard !didRequestPushAuthorization else { return }
+        didRequestPushAuthorization = true
+
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if let error {
+                print("Notification authorization request failed: \(error.localizedDescription)")
+                return
+            }
+
+            if !granted {
+                print("Notification authorization was denied.")
+            }
+
+            DispatchQueue.main.async {
+                UIApplication.shared.registerForRemoteNotifications()
             }
         }
     }
