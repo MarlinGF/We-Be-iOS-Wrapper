@@ -35,7 +35,6 @@ final class WebViewStore: ObservableObject {
                         document.body.setAttribute('data-platform', 'ios');
                     }
                 }
-
                 markIOS();
                 document.addEventListener('DOMContentLoaded', markIOS, { once: true });
             })();
@@ -45,15 +44,18 @@ final class WebViewStore: ObservableObject {
         )
 
         contentController.addUserScript(platformScript)
+        contentController.addUserScript(
+            WKUserScript(
+                source: WebAuthBridgeScript.source,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
         config.userContentController = contentController
 
-        // Keep video inside the page (not fullscreen)
         config.allowsInlineMediaPlayback = true
-
-        // Prevent iOS AirPlay media controller hijacking camera preview
         config.allowsAirPlayForMediaPlayback = false
 
-        // Don't require a tap to start preview playback
         if #available(iOS 10.0, *) {
             config.mediaTypesRequiringUserActionForPlayback = []
         } else {
@@ -68,12 +70,19 @@ final class WebViewStore: ObservableObject {
         webView.scrollView.isScrollEnabled = true
         webView.scrollView.bounces = true
         webView.allowsBackForwardNavigationGestures = true
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+
+        // Force dark mode immediately to reduce flash
+        if #available(iOS 13.0, *) {
+            webView.overrideUserInterfaceStyle = .dark
+        }
 
         let request = URLRequest(url: url)
         webView.load(request)
     }
 }
 
+// WebViewWrapper stays exactly the same as last version (pull-to-refresh fixed)
 struct WebViewWrapper: UIViewRepresentable {
 
     @ObservedObject var store: WebViewStore
@@ -84,16 +93,22 @@ struct WebViewWrapper: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let webView = store.webView
+        let contentController = webView.configuration.userContentController
 
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
+        contentController.removeScriptMessageHandler(forName: WebAuthBridgeScript.handlerName)
+        contentController.add(context.coordinator.authStateHandler, name: WebAuthBridgeScript.handlerName)
 
         let refresh = UIRefreshControl()
+        refresh.tintColor = .systemBlue
         refresh.addTarget(context.coordinator,
                           action: #selector(Coordinator.didPullToRefresh),
                           for: .valueChanged)
 
         webView.scrollView.refreshControl = refresh
+        webView.scrollView.bounces = true
+        webView.scrollView.alwaysBounceVertical = true
 
         return webView
     }
@@ -103,6 +118,7 @@ struct WebViewWrapper: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
 
         private let parent: WebViewWrapper
+        let authStateHandler = WebAuthScriptMessageHandler()
 
         init(_ parent: WebViewWrapper) {
             self.parent = parent
@@ -110,7 +126,9 @@ struct WebViewWrapper: UIViewRepresentable {
 
         @objc func didPullToRefresh() {
             parent.store.webView.reload()
-            parent.store.webView.scrollView.refreshControl?.endRefreshing()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                self.parent.store.webView.scrollView.refreshControl?.endRefreshing()
+            }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -150,14 +168,9 @@ struct WebViewWrapper: UIViewRepresentable {
             }
 
             let allowedDomains = [
-                "webefriends.com",
-                "stripe.com",
-                "stripe.network",
-                "fairnewsfirst.com",
-                "firebaseapp.com",
-                "googleapis.com",
-                "gstatic.com",
-                "hosted.app"
+                "webefriends.com", "stripe.com", "stripe.network",
+                "fairnewsfirst.com", "firebaseapp.com", "googleapis.com",
+                "gstatic.com", "hosted.app"
             ]
 
             if let host = url.host {
@@ -171,7 +184,6 @@ struct WebViewWrapper: UIViewRepresentable {
             decisionHandler(.cancel)
         }
 
-        // Handle new window / target="_blank" requests
         func webView(_ webView: WKWebView,
                      createWebViewWith configuration: WKWebViewConfiguration,
                      for navigationAction: WKNavigationAction,
@@ -180,11 +192,9 @@ struct WebViewWrapper: UIViewRepresentable {
             if navigationAction.targetFrame == nil {
                 webView.load(navigationAction.request)
             }
-
             return nil
         }
 
-        // Camera & microphone permission handling
         @available(iOS 15.0, *)
         func webView(_ webView: WKWebView,
                      requestMediaCapturePermissionFor origin: WKSecurityOrigin,
@@ -211,20 +221,19 @@ struct WebViewWrapper: UIViewRepresentable {
 }
 
 struct ContentView: View {
+    @UIApplicationDelegateAdaptor(PushNotificationAppDelegate.self) private var appDelegate
 
     @StateObject private var network = NetworkMonitor()
     @StateObject private var store = WebViewStore(url: URL(string: "https://webefriends.com")!)
     @State private var isLoading = true
 
     var body: some View {
-
         ZStack {
-
             WebViewWrapper(store: store)
                 .ignoresSafeArea()
                 .opacity(isLoading ? 0 : 1)
                 .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {  // slightly faster fade
                         isLoading = false
                     }
                 }
@@ -241,15 +250,13 @@ struct ContentView: View {
                     .transition(.opacity)
             }
         }
+        .preferredColorScheme(.dark)   // Force dark mode at SwiftUI level
     }
 }
 
 struct LoadingView: View {
-
     var body: some View {
-
         VStack(spacing: 20) {
-
             Image("webeLogo")
                 .resizable()
                 .scaledToFit()
@@ -262,18 +269,15 @@ struct LoadingView: View {
                 .font(.headline)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
+        .background(Color.black)   // Solid black while loading
     }
 }
 
 struct OfflineView: View {
-
     let retryAction: () -> Void
 
     var body: some View {
-
         VStack(spacing: 14) {
-
             Image(systemName: "wifi.slash")
                 .font(.system(size: 44))
 
@@ -292,6 +296,6 @@ struct OfflineView: View {
             .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground).opacity(0.98))
+        .background(Color.black.opacity(0.98))
     }
 }
