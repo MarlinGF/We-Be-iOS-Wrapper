@@ -26,7 +26,6 @@ final class PushNotificationManager: NSObject {
         Messaging.messaging().delegate = self
         logAuthorizationStatus()
         requestAuthorizationAndRegisterIfNeeded()
-        refreshFCMToken()
     }
 
     func updateCurrentUserId(_ userId: String?) {
@@ -93,15 +92,29 @@ final class PushNotificationManager: NSObject {
     }
 
     private func requestAuthorizationAndRegisterIfNeeded() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
-            if let error {
-                print("Push authorization failed: \(error.localizedDescription)")
-                return
-            }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                DispatchQueue.main.async {
+                    print("PushDebug: notifications already authorized. Registering for remote notifications.")
+                    UIApplication.shared.registerForRemoteNotifications()
+                }
+            case .notDetermined:
+                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+                    if let error {
+                        print("Push authorization failed: \(error.localizedDescription)")
+                        return
+                    }
 
-            DispatchQueue.main.async {
-                print("PushDebug: authorization prompt result granted=\(granted). Registering for remote notifications.")
-                UIApplication.shared.registerForRemoteNotifications()
+                    DispatchQueue.main.async {
+                        print("PushDebug: authorization prompt result granted=\(granted). Registering for remote notifications.")
+                        UIApplication.shared.registerForRemoteNotifications()
+                    }
+                }
+            case .denied:
+                print("Push authorization not granted.")
+            @unknown default:
+                print("PushDebug: unknown notification authorization status \(settings.authorizationStatus.rawValue).")
             }
         }
     }
