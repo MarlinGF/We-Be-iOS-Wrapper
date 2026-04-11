@@ -1,8 +1,6 @@
 import Foundation
 import UIKit
 import UserNotifications
-import FirebaseCore
-import FirebaseMessaging
 import WebKit
 
 @MainActor
@@ -16,15 +14,7 @@ final class PushNotificationManager: NSObject {
     private var hasAttemptedPushRegistration = false
 
     func configure() {
-        if FirebaseApp.app() == nil {
-            FirebaseApp.configure()
-            print("PushDebug: Firebase configured in app delegate.")
-        } else {
-            print("PushDebug: Firebase already configured before push setup.")
-        }
-
         UNUserNotificationCenter.current().delegate = self
-        Messaging.messaging().delegate = self
         logAuthorizationStatus()
     }
 
@@ -43,9 +33,11 @@ final class PushNotificationManager: NSObject {
     }
 
     func updateAPNsToken(_ deviceToken: Data) {
-        Messaging.messaging().apnsToken = deviceToken
-        print("PushDebug: APNs token handed to Firebase Messaging.")
-        refreshFCMToken()
+        currentToken = deviceToken.map { String(format: "%02x", $0) }.joined()
+        print("PushDebug: APNs token captured with prefix \(String(currentToken?.prefix(12) ?? ""))...")
+        Task {
+            await syncIfNeeded()
+        }
     }
 
     fileprivate func syncIfNeeded() async {
@@ -65,27 +57,28 @@ final class PushNotificationManager: NSObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
             "userId": userId,
-            "tokenType": "fcm",
+            "tokenType": "apns",
             "token": token,
+            "environment": currentPushEnvironment,
         ])
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
-                print("FCM token sync failed: missing HTTP response.")
+                print("APNs token sync failed: missing HTTP response.")
                 return
             }
 
             let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
             guard (200...299).contains(httpResponse.statusCode) else {
-                print("FCM token sync failed with status \(httpResponse.statusCode): \(responseBody)")
+                print("APNs token sync failed with status \(httpResponse.statusCode): \(responseBody)")
                 return
             }
 
             lastSyncedPair = pair
-            print("FCM token synced for user \(userId). Response: \(responseBody)")
+            print("APNs token synced for user \(userId). Response: \(responseBody)")
         } catch {
-            print("FCM token sync failed: \(error.localizedDescription)")
+            print("APNs token sync failed: \(error.localizedDescription)")
         }
     }
 
@@ -128,44 +121,6 @@ final class PushNotificationManager: NSObject {
             }
         }
     }
-
-    private func refreshFCMToken() {
-        Messaging.messaging().token { [weak self] token, error in
-            if let error {
-                print("FCM token fetch failed: \(error.localizedDescription)")
-                return
-            }
-
-            guard let self, let token, !token.isEmpty else {
-                print("PushDebug: Firebase Messaging returned an empty FCM token.")
-                return
-            }
-
-            let prefix = String(token.prefix(12))
-            print("PushDebug: FCM token fetched with prefix \(prefix)...")
-
-            Task { @MainActor in
-                self.currentToken = token
-                await self.syncIfNeeded()
-            }
-        }
-    }
-}
-
-extension PushNotificationManager: MessagingDelegate {
-    nonisolated func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
-        guard let fcmToken, !fcmToken.isEmpty else {
-            print("PushDebug: Messaging delegate received an empty registration token.")
-            return
-        }
-
-        let prefix = String(fcmToken.prefix(12))
-        print("PushDebug: Messaging delegate received FCM token prefix \(prefix)...")
-        Task { @MainActor in
-            PushNotificationManager.shared.currentToken = fcmToken
-            await PushNotificationManager.shared.syncIfNeeded()
-        }
-    }
 }
 
 extension PushNotificationManager: UNUserNotificationCenterDelegate {
@@ -199,6 +154,14 @@ final class PushNotificationAppDelegate: NSObject, UIApplicationDelegate {
         print("=== App became active - checking push registration ===")
         PushNotificationManager.shared.configure()
     }
+}
+
+private var currentPushEnvironment: String {
+#if DEBUG
+    return "development"
+#else
+    return "production"
+#endif
 }
 
 enum WebAuthBridgeScript {
