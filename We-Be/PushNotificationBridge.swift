@@ -13,6 +13,7 @@ final class PushNotificationManager: NSObject {
     private var currentUserId: String?
     fileprivate var currentToken: String?
     private var lastSyncedPair: String?
+    private var hasAttemptedPushRegistration = false
 
     func configure() {
         if FirebaseApp.app() == nil {
@@ -25,13 +26,16 @@ final class PushNotificationManager: NSObject {
         UNUserNotificationCenter.current().delegate = self
         Messaging.messaging().delegate = self
         logAuthorizationStatus()
-        requestAuthorizationAndRegisterIfNeeded()
     }
 
     func updateCurrentUserId(_ userId: String?) {
         let normalized = userId?.trimmingCharacters(in: .whitespacesAndNewlines)
         currentUserId = (normalized?.isEmpty == false) ? normalized : nil
         print("PushDebug: current user id updated to \(currentUserId ?? "<none>").")
+
+        if currentUserId != nil {
+            requestAuthorizationAndRegisterIfNeeded()
+        }
 
         Task {
             await syncIfNeeded()
@@ -92,6 +96,12 @@ final class PushNotificationManager: NSObject {
     }
 
     private func requestAuthorizationAndRegisterIfNeeded() {
+        guard !hasAttemptedPushRegistration else {
+            print("PushDebug: push registration already attempted for this launch.")
+            return
+        }
+
+        hasAttemptedPushRegistration = true
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             switch settings.authorizationStatus {
             case .authorized, .provisional, .ephemeral:
