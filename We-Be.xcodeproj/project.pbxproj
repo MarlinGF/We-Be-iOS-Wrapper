@@ -17,9 +17,22 @@
 		244749722F59CFAD00194640 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		246135562F881A5B00917237 /* Exceptions for "We-Be" folder in "We-Be" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 244749512F58A5EA00194640 /* We-Be */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		244749542F58A5EA00194640 /* We-Be */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				246135562F881A5B00917237 /* Exceptions for "We-Be" folder in "We-Be" target */,
+			);
 			path = "We-Be";
 			sourceTree = "<group>";
 		};
@@ -282,6 +295,7 @@
 				DEVELOPMENT_TEAM = UKGZV2J5S7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "We-Be/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "We-Be";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
@@ -323,6 +337,7 @@
 				DEVELOPMENT_TEAM = UKGZV2J5S7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "We-Be/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "We-Be";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";

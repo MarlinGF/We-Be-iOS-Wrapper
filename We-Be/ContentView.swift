@@ -3,6 +3,7 @@ import WebKit
 import Network
 import Combine
 import AVFoundation
+import UserNotifications
 
 final class NetworkMonitor: ObservableObject {
     private let monitor = NWPathMonitor()
@@ -119,9 +120,44 @@ struct WebViewWrapper: UIViewRepresentable {
 
         private let parent: WebViewWrapper
         let authStateHandler = WebAuthScriptMessageHandler()
+        private let allowedDomains: Set<String> = [
+            "webefriends.com",
+            "stripe.com",
+            "stripe.network",
+            "fairnewsfirst.com",
+            "firebaseapp.com",
+            "googleapis.com",
+            "gstatic.com",
+            "hosted.app"
+        ]
+        private let allowedEmbedHosts: Set<String> = [
+            "youtube.com",
+            "www.youtube.com",
+            "youtube-nocookie.com",
+            "www.youtube-nocookie.com",
+            "youtu.be",
+            "ytimg.com",
+            "i.ytimg.com",
+            "tiktok.com",
+            "www.tiktok.com",
+            "vm.tiktok.com",
+            "vt.tiktok.com"
+        ]
 
         init(_ parent: WebViewWrapper) {
             self.parent = parent
+        }
+
+        private func hostMatchesAllowedSet(_ host: String, allowedHosts: Set<String>) -> Bool {
+            let normalizedHost = host.lowercased()
+            return allowedHosts.contains { allowed in
+                normalizedHost == allowed || normalizedHost.hasSuffix(".\(allowed)")
+            }
+        }
+
+        private func hostIsAllowed(_ host: String) -> Bool {
+            hostMatchesAllowedSet(host, allowedHosts: allowedDomains) ||
+            hostMatchesAllowedSet(host, allowedHosts: allowedEmbedHosts)
         }
 
         @objc func didPullToRefresh() {
@@ -167,17 +203,24 @@ struct WebViewWrapper: UIViewRepresentable {
                 return
             }
 
-            let allowedDomains = [
-                "webefriends.com", "stripe.com", "stripe.network",
-                "fairnewsfirst.com", "firebaseapp.com", "googleapis.com",
-                "gstatic.com", "hosted.app"
-            ]
-
             if let host = url.host {
-                if allowedDomains.contains(where: { host.contains($0) }) {
+                if hostIsAllowed(host) {
                     decisionHandler(.allow)
                     return
                 }
+            }
+
+            let isTopFrameNavigation = navigationAction.targetFrame?.isMainFrame ?? false
+            let isExplicitUserTap = navigationAction.navigationType == .linkActivated
+
+            if !isTopFrameNavigation {
+                decisionHandler(.allow)
+                return
+            }
+
+            if !isExplicitUserTap {
+                decisionHandler(.allow)
+                return
             }
 
             UIApplication.shared.open(url)
@@ -190,7 +233,13 @@ struct WebViewWrapper: UIViewRepresentable {
                      windowFeatures: WKWindowFeatures) -> WKWebView? {
 
             if navigationAction.targetFrame == nil {
-                webView.load(navigationAction.request)
+                if let url = navigationAction.request.url,
+                   let host = url.host,
+                   hostIsAllowed(host) {
+                    webView.load(navigationAction.request)
+                } else if let url = navigationAction.request.url {
+                    UIApplication.shared.open(url)
+                }
             }
             return nil
         }
@@ -221,11 +270,10 @@ struct WebViewWrapper: UIViewRepresentable {
 }
 
 struct ContentView: View {
-    @UIApplicationDelegateAdaptor(PushNotificationAppDelegate.self) private var appDelegate
-
     @StateObject private var network = NetworkMonitor()
     @StateObject private var store = WebViewStore(url: URL(string: "https://webefriends.com")!)
     @State private var isLoading = true
+    @State private var didRequestPushAuthorization = false
 
     var body: some View {
         ZStack {
@@ -236,6 +284,8 @@ struct ContentView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {  // slightly faster fade
                         isLoading = false
                     }
+
+                    requestPushAuthorizationIfNeeded()
                 }
 
             if !network.isOnline {
@@ -251,6 +301,26 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)   // Force dark mode at SwiftUI level
+    }
+
+    private func requestPushAuthorizationIfNeeded() {
+        guard !didRequestPushAuthorization else { return }
+        didRequestPushAuthorization = true
+
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if let error {
+                print("Notification authorization request failed: \(error.localizedDescription)")
+                return
+            }
+
+            if !granted {
+                print("Notification authorization was denied.")
+            }
+
+            DispatchQueue.main.async {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
+        }
     }
 }
 

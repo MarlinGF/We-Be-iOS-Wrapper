@@ -133,13 +133,19 @@ final class PushNotificationAppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        print("=== APNs TOKEN RECEIVED === \(token)")
         Task { @MainActor in
             PushNotificationManager.shared.updateAPNsToken(deviceToken)
         }
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        print("APNs registration failed: \(error.localizedDescription)")
+        print("=== APNs REGISTRATION FAILED === \(error.localizedDescription)")
+    }
+
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        print("=== App became active - checking push registration ===")
     }
 }
 
