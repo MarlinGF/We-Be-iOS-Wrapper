@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import UserNotifications
+import FirebaseCore
 import FirebaseMessaging
 import WebKit
 
@@ -14,15 +15,24 @@ final class PushNotificationManager: NSObject {
     private var lastSyncedPair: String?
 
     func configure() {
+        if FirebaseApp.app() == nil {
+            FirebaseApp.configure()
+            print("PushDebug: Firebase configured in app delegate.")
+        } else {
+            print("PushDebug: Firebase already configured before push setup.")
+        }
+
         UNUserNotificationCenter.current().delegate = self
         Messaging.messaging().delegate = self
-        requestAuthorizationAndRegister()
+        logAuthorizationStatus()
+        requestAuthorizationAndRegisterIfNeeded()
         refreshFCMToken()
     }
 
     func updateCurrentUserId(_ userId: String?) {
         let normalized = userId?.trimmingCharacters(in: .whitespacesAndNewlines)
         currentUserId = (normalized?.isEmpty == false) ? normalized : nil
+        print("PushDebug: current user id updated to \(currentUserId ?? "<none>").")
 
         Task {
             await syncIfNeeded()
@@ -31,16 +41,19 @@ final class PushNotificationManager: NSObject {
 
     func updateAPNsToken(_ deviceToken: Data) {
         Messaging.messaging().apnsToken = deviceToken
+        print("PushDebug: APNs token handed to Firebase Messaging.")
         refreshFCMToken()
     }
 
     fileprivate func syncIfNeeded() async {
         guard let userId = currentUserId, let token = currentToken else {
+            print("PushDebug: sync skipped; userId=\(currentUserId ?? "<none>") tokenPresent=\(currentToken != nil).")
             return
         }
 
         let pair = "\(userId)::\(token)"
         if lastSyncedPair == pair {
+            print("PushDebug: sync skipped; token already stored for \(userId).")
             return
         }
 
@@ -54,32 +67,40 @@ final class PushNotificationManager: NSObject {
         ])
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-                print("FCM token sync failed with non-success response.")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("FCM token sync failed: missing HTTP response.")
+                return
+            }
+
+            let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+            guard (200...299).contains(httpResponse.statusCode) else {
+                print("FCM token sync failed with status \(httpResponse.statusCode): \(responseBody)")
                 return
             }
 
             lastSyncedPair = pair
-            print("FCM token synced for user \(userId).")
+            print("FCM token synced for user \(userId). Response: \(responseBody)")
         } catch {
             print("FCM token sync failed: \(error.localizedDescription)")
         }
     }
 
-    private func requestAuthorizationAndRegister() {
+    private func logAuthorizationStatus() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            print("PushDebug: authorization status is \(settings.authorizationStatus.rawValue); badges=\(settings.badgeSetting.rawValue) alerts=\(settings.alertSetting.rawValue) sounds=\(settings.soundSetting.rawValue).")
+        }
+    }
+
+    private func requestAuthorizationAndRegisterIfNeeded() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
             if let error {
                 print("Push authorization failed: \(error.localizedDescription)")
                 return
             }
 
-            guard granted else {
-                print("Push authorization not granted.")
-                return
-            }
-
             DispatchQueue.main.async {
+                print("PushDebug: authorization prompt result granted=\(granted). Registering for remote notifications.")
                 UIApplication.shared.registerForRemoteNotifications()
             }
         }
@@ -93,8 +114,12 @@ final class PushNotificationManager: NSObject {
             }
 
             guard let self, let token, !token.isEmpty else {
+                print("PushDebug: Firebase Messaging returned an empty FCM token.")
                 return
             }
+
+            let prefix = String(token.prefix(12))
+            print("PushDebug: FCM token fetched with prefix \(prefix)...")
 
             Task { @MainActor in
                 self.currentToken = token
@@ -107,9 +132,12 @@ final class PushNotificationManager: NSObject {
 extension PushNotificationManager: MessagingDelegate {
     nonisolated func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
         guard let fcmToken, !fcmToken.isEmpty else {
+            print("PushDebug: Messaging delegate received an empty registration token.")
             return
         }
 
+        let prefix = String(fcmToken.prefix(12))
+        print("PushDebug: Messaging delegate received FCM token prefix \(prefix)...")
         Task { @MainActor in
             PushNotificationManager.shared.currentToken = fcmToken
             await PushNotificationManager.shared.syncIfNeeded()
@@ -146,6 +174,7 @@ final class PushNotificationAppDelegate: NSObject, UIApplicationDelegate {
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         print("=== App became active - checking push registration ===")
+        PushNotificationManager.shared.configure()
     }
 }
 
@@ -156,6 +185,13 @@ enum WebAuthBridgeScript {
     (function() {
         const handlerName = '\(handlerName)';
         let lastUid = null;
+
+        function log(message) {
+            try {
+                console.log('[We-Be iOS bridge]', message);
+            } catch (error) {
+            }
+        }
 
         function currentUid() {
             try {
@@ -172,6 +208,7 @@ enum WebAuthBridgeScript {
 
                     const parsed = JSON.parse(raw);
                     if (parsed && typeof parsed.uid === 'string' && parsed.uid.length > 0) {
+                        log('found uid in localStorage');
                         return parsed.uid;
                     }
                 }
@@ -189,6 +226,7 @@ enum WebAuthBridgeScript {
             }
 
             lastUid = uid;
+            log(uid ? 'publishing uid to native bridge' : 'publishing signed-out state to native bridge');
             try {
                 window.webkit.messageHandlers[handlerName].postMessage(uid);
             } catch (error) {
@@ -196,9 +234,27 @@ enum WebAuthBridgeScript {
             }
         }
 
+        const originalSetItem = localStorage.setItem.bind(localStorage);
+        localStorage.setItem = function(key, value) {
+            originalSetItem(key, value);
+            if (typeof key === 'string' && key.startsWith('firebase:authUser:')) {
+                publish();
+            }
+        };
+
+        const originalRemoveItem = localStorage.removeItem.bind(localStorage);
+        localStorage.removeItem = function(key) {
+            originalRemoveItem(key);
+            if (typeof key === 'string' && key.startsWith('firebase:authUser:')) {
+                publish();
+            }
+        };
+
         publish();
+        window.addEventListener('load', publish);
         window.addEventListener('focus', publish);
         window.addEventListener('pageshow', publish);
+        window.addEventListener('storage', publish);
         document.addEventListener('visibilitychange', publish);
         setInterval(publish, 2000);
     })();
@@ -212,6 +268,7 @@ final class WebAuthScriptMessageHandler: NSObject, WKScriptMessageHandler {
         }
 
         let uid = (message.body as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("PushDebug: web auth bridge delivered uid \(uid?.isEmpty == false ? uid! : "<none>").")
         Task { @MainActor in
             PushNotificationManager.shared.updateCurrentUserId(uid)
         }
