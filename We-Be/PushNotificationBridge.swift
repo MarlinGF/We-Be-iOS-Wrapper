@@ -40,6 +40,12 @@ final class PushNotificationManager: NSObject {
         }
     }
 
+    func updateBadgeCount(_ count: Int) {
+        let sanitizedCount = max(0, count)
+        UIApplication.shared.applicationIconBadgeNumber = sanitizedCount
+        print("PushDebug: native badge count updated to \(sanitizedCount).")
+    }
+
     fileprivate func syncIfNeeded() async {
         guard let userId = currentUserId, let token = currentToken else {
             print("PushDebug: sync skipped; userId=\(currentUserId ?? "<none>") tokenPresent=\(currentToken != nil).")
@@ -247,6 +253,10 @@ enum WebAuthBridgeScript {
     """
 }
 
+enum WebBadgeBridgeScript {
+    static let handlerName = "webeBadgeCount"
+}
+
 final class WebAuthScriptMessageHandler: NSObject, WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == WebAuthBridgeScript.handlerName else {
@@ -257,6 +267,28 @@ final class WebAuthScriptMessageHandler: NSObject, WKScriptMessageHandler {
         print("PushDebug: web auth bridge delivered uid \(uid?.isEmpty == false ? uid! : "<none>").")
         Task { @MainActor in
             PushNotificationManager.shared.updateCurrentUserId(uid)
+        }
+    }
+}
+
+final class WebBadgeScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == WebBadgeBridgeScript.handlerName else {
+            return
+        }
+
+        let badgeValue: Int
+        if let number = message.body as? NSNumber {
+            badgeValue = number.intValue
+        } else if let stringValue = message.body as? String, let parsed = Int(stringValue) {
+            badgeValue = parsed
+        } else {
+            print("PushDebug: ignored invalid badge payload \(message.body).")
+            return
+        }
+
+        Task { @MainActor in
+            PushNotificationManager.shared.updateBadgeCount(badgeValue)
         }
     }
 }

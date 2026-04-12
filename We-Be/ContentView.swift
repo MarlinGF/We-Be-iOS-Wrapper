@@ -99,6 +99,8 @@ struct WebViewWrapper: UIViewRepresentable {
         webView.uiDelegate = context.coordinator
         contentController.removeScriptMessageHandler(forName: WebAuthBridgeScript.handlerName)
         contentController.add(context.coordinator.authStateHandler, name: WebAuthBridgeScript.handlerName)
+        contentController.removeScriptMessageHandler(forName: WebBadgeBridgeScript.handlerName)
+        contentController.add(context.coordinator.badgeHandler, name: WebBadgeBridgeScript.handlerName)
 
         let refresh = UIRefreshControl()
         refresh.tintColor = .systemBlue
@@ -119,6 +121,7 @@ struct WebViewWrapper: UIViewRepresentable {
 
         private let parent: WebViewWrapper
         let authStateHandler = WebAuthScriptMessageHandler()
+        let badgeHandler = WebBadgeScriptMessageHandler()
         private let allowedDomains: Set<String> = [
             "webefriends.com",
             "stripe.com",
